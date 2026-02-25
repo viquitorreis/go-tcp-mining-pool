@@ -11,14 +11,14 @@ import (
 	"sync"
 	"tcp_luxor/client"
 	"tcp_luxor/protocol"
-
-	"github.com/google/uuid"
+	"time"
 )
 
 type Server struct {
 	port     string
-	clients  map[uuid.UUID]*client.Client
+	clients  map[client.ClienID]*client.Client
 	listener net.Listener
+	router   *Router
 
 	wg sync.WaitGroup
 	mu sync.Mutex
@@ -32,7 +32,8 @@ type IServer interface {
 func NewServer(p string) IServer {
 	return &Server{
 		port:    p,
-		clients: make(map[uuid.UUID]*client.Client),
+		clients: make(map[client.ClienID]*client.Client),
+		router:  NewRouter(),
 	}
 }
 
@@ -51,6 +52,8 @@ func (s *Server) Start(ctx context.Context) error {
 		<-ctx.Done()
 		listener.Close()
 	}()
+
+	go s.RouteManager()
 
 	for {
 		conn, err := listener.Accept()
@@ -85,12 +88,20 @@ func (s *Server) Stop() {
 	log.Println("server stopped gracefully")
 }
 
+func (s *Server) RouteManager() {
+	s.router.Register(protocol.MethodAuthorize, s.HandleAuth)
+
+	s.router.Register(protocol.MethodJob, s.HandleJob, s.AuthMiddleware)
+	s.router.Register(protocol.MethodSubmit, s.HandleSubmit, s.AuthMiddleware)
+}
+
 func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
 	client := &client.Client{
-		ID:   uuid.New(),
-		Conn: conn,
+		ID:        client.NewClientID(len(s.clients)),
+		Conn:      conn,
+		StartedAt: time.Now(),
 	}
 
 	s.mu.Lock()
@@ -140,14 +151,37 @@ func (s *Server) readLoop(ctx context.Context, client *client.Client) {
 				continue
 			}
 
-			log.Printf("client: %s sent message: id=%s method=%s params=%s\n",
-				client.ID, msgJSON.ID, msgJSON.Method, string(msgJSON.Params))
+			log.Printf("client: %s sent message: id=%d method=%s params=%s\n",
+				client.ID, msgJSON.ID, msgJSON.Method.ToString(), string(msgJSON.Params))
+
+			if err := s.SessionHandler(client, msgJSON); err != nil {
+				slog.Error("error handling session handler", "client_id", client.ID, "error", err)
+				continue
+			}
+
+			s.ReadAllClients()
 		}
 	}
 }
 
-func (s *Server) removeClient(id uuid.UUID) {
+func (s *Server) removeClient(id client.ClienID) {
 	s.mu.Lock()
 	delete(s.clients, id)
+	s.mu.Unlock()
+}
+
+// type Client struct {
+// 	ID            uuid.UUID
+// 	Conn          net.Conn
+// 	Username      string
+// 	Authenticated bool
+// }
+
+func (s *Server) ReadAllClients() {
+	s.mu.Lock()
+	for id, client := range s.clients {
+		log.Printf("Client ID: %s, Username: %s, Authenticated: %t, StartedAt: %s\n",
+			id, client.Username, client.Authenticated, client.StartedAt.String())
+	}
 	s.mu.Unlock()
 }

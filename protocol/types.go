@@ -24,7 +24,7 @@ func (m Method) ToString() string {
 }
 
 type Message struct {
-	ID     string          `json:"id"`
+	ID     int             `json:"id"`
 	Method Method          `json:"method"`
 	Params json.RawMessage `json:"params"`
 
