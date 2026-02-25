@@ -7,6 +7,7 @@ import (
 )
 
 type Client struct {
-	ID   uuid.UUID
-	Conn net.Conn
+	ID           uuid.UUID
+	Conn         net.Conn
+	IsAuthorized bool
 }

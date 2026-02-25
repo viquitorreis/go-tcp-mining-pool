@@ -1,8 +1,8 @@
 package server
 
 import (
+	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +10,7 @@ import (
 	"net"
 	"sync"
 	"tcp_luxor/client"
+	"tcp_luxor/protocol"
 
 	"github.com/google/uuid"
 )
@@ -64,8 +65,9 @@ func (s *Server) Start(ctx context.Context) error {
 
 		}
 
-		s.wg.Add(1)
-		go s.handleClient(ctx, conn)
+		s.wg.Go(func() {
+			s.handleClient(ctx, conn)
+		})
 	}
 }
 
@@ -84,7 +86,6 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
-	defer s.wg.Done()
 	defer conn.Close()
 
 	client := &client.Client{
@@ -103,26 +104,45 @@ func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
 		s.removeClient(client.ID)
 	}()
 
-	// read messages aqui
-	buf := make([]byte, 4096)
+	var clientWg sync.WaitGroup
+	clientWg.Go(func() {
+		s.readLoop(ctx, client)
+	})
+
+	clientWg.Wait()
+}
+
+func (s *Server) readLoop(ctx context.Context, client *client.Client) {
+	reader := bufio.NewReader(client.Conn)
 	for {
-		n, err := conn.Read(buf)
-		if err != nil {
-			// ctx cancelado -> server encerrando
-			if ctx.Err() != nil {
-				return
-			}
-
-			if errors.Is(err, io.EOF) {
-				log.Println("client closed connection")
-				return
-			}
-
-			slog.Error("error reading from client", "client_id", client.ID, "error", err)
+		select {
+		case <-ctx.Done():
+			log.Println("context expired while trying to read from client")
 			return
-		}
+		default:
+			msg, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					return
+				}
 
-		log.Printf("received %d bytes from client %s: %s", n, client.ID, buf[:n])
+				// shutdown
+				if ctx.Err() != nil {
+					return
+				}
+
+				slog.Error("error while reading from client", "client_id", client.ID, "error", err)
+				return
+			}
+
+			msgJSON, err := protocol.ReadJSON(msg)
+			if err != nil {
+				continue
+			}
+
+			log.Printf("client: %s sent message: id=%s method=%s params=%s\n",
+				client.ID, msgJSON.ID, msgJSON.Method, string(msgJSON.Params))
+		}
 	}
 }
 
