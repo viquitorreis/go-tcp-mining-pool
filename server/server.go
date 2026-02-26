@@ -10,21 +10,22 @@ import (
 	"log/slog"
 	"net"
 	"sync"
-	"tcp_luxor/client"
 	"tcp_luxor/infra/db"
+	"tcp_luxor/pool/dispatcher"
+	"tcp_luxor/pool/session"
 	"tcp_luxor/protocol"
 	"time"
 )
 
 type Server struct {
 	port       string
-	clients    map[client.ClientID]*client.Client
+	clients    map[session.SessionID]*session.Session
 	listener   net.Listener
 	router     *Router
-	dispatcher IDispatcher
+	dispatcher dispatcher.IDispatcher
 	stats      map[string]int // username -> submssion count
 	conn       *db.DB
-	jobsChan   chan ServerJob
+	jobsChan   chan dispatcher.ServerJob
 
 	wg sync.WaitGroup
 	mu sync.RWMutex
@@ -36,13 +37,13 @@ type IServer interface {
 }
 
 func NewServer(p string) IServer {
-	jobsCh := make(chan ServerJob)
+	jobsCh := make(chan dispatcher.ServerJob)
 
 	return &Server{
 		port:       p,
-		clients:    make(map[client.ClientID]*client.Client),
+		clients:    make(map[session.SessionID]*session.Session),
 		router:     NewRouter(),
-		dispatcher: NewDispatcher(time.Second*5, jobsCh),
+		dispatcher: dispatcher.NewDispatcher(time.Second*30, jobsCh),
 		stats:      make(map[string]int),
 		jobsChan:   jobsCh,
 	}
@@ -101,7 +102,7 @@ func (s *Server) Stop() {
 
 	for _, c := range s.clients {
 		c.CloseConn()
-		delete(s.clients, c.GetID())
+		delete(s.clients, c.GetSessionID())
 	}
 
 	s.mu.Unlock()
@@ -120,33 +121,33 @@ func (s *Server) RouteManager() {
 func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
-	client := client.NewClient(len(s.clients), conn)
+	session := session.NewSession(len(s.clients), conn)
 
 	s.mu.Lock()
-	s.clients[client.GetID()] = client
+	s.clients[session.GetSessionID()] = session
 	s.mu.Unlock()
 
-	slog.Info("new client connected", "client_id", client.GetID())
+	slog.Info("new client connected", "session_id", session.GetSessionID())
 
 	defer func() {
-		slog.Info("client disconnected", "client_id", client.GetID())
-		s.removeClient(client.GetID())
+		slog.Info("client disconnected", "session_id", session.GetSessionID())
+		s.removeClient(session.GetSessionID())
 	}()
 
 	var clientWg sync.WaitGroup
 	clientWg.Go(func() {
-		s.readLoop(ctx, client)
+		s.readLoop(ctx, session)
 	})
 
 	clientWg.Wait()
 }
 
-func (s *Server) readLoop(ctx context.Context, c *client.Client) {
-	reader := bufio.NewReader(c.GetConn())
+func (s *Server) readLoop(ctx context.Context, c *session.Session) {
+	reader := bufio.NewReader(c)
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Warn("context expired while trying to read from client", "client_id", c.GetID())
+			slog.Warn("context expired while trying to read from client", "session_id", c.GetSessionID())
 			return
 		default:
 			line, err := reader.ReadBytes('\n')
@@ -160,22 +161,22 @@ func (s *Server) readLoop(ctx context.Context, c *client.Client) {
 					return
 				}
 
-				slog.Error("error while reading from client", "client_id", c.GetID(), "error", err)
+				slog.Error("error while reading from client", "session_id", c.GetSessionID(), "error", err)
 				return
 			}
 
 			msg, err := protocol.Parse(line)
 			if err != nil {
-				slog.Warn("invalid message", "client_id", c.GetID(), "error", err)
+				slog.Warn("invalid message", "session_id", c.GetSessionID(), "error", err)
 				continue
 			}
 
 			// APAGAR
 			log.Printf("client: %s sent message: id=%d method=%s params=%s\n",
-				c.GetID(), msg.ID, msg.Method.ToString(), string(msg.Params))
+				c.GetSessionID(), msg.ID, msg.Method.ToString(), string(msg.Params))
 
 			if err := s.SessionHandler(c, msg); err != nil {
-				slog.Error("error handling session handler", "client_id", c.GetID(), "error", err)
+				slog.Error("error handling session handler", "session_id", c.GetSessionID(), "error", err)
 				s.write(c, protocol.BuildResponse(msg.ID, err))
 
 				continue
@@ -184,22 +185,22 @@ func (s *Server) readLoop(ctx context.Context, c *client.Client) {
 	}
 }
 
-func (s *Server) removeClient(id client.ClientID) {
+func (s *Server) removeClient(id session.SessionID) {
 	s.mu.Lock()
 	delete(s.clients, id)
 	s.mu.Unlock()
 }
 
-func (s *Server) write(c *client.Client, msg any) {
+func (s *Server) write(se *session.Session, msg any) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		slog.Error("error marshaling response", "client_id", c.GetID(), "error", err)
+		slog.Error("error marshaling response", "session_id", se.GetSessionID(), "error", err)
 		return
 	}
 
 	data = append(data, '\n')
 
-	c.Write(data)
+	se.Write(data)
 }
 
 func (s *Server) ListenDispatcher(ctx context.Context) {
@@ -214,7 +215,7 @@ func (s *Server) ListenDispatcher(ctx context.Context) {
 	}
 }
 
-func (s *Server) broadcastJob(job ServerJob) {
+func (s *Server) broadcastJob(job dispatcher.ServerJob) {
 	msg, err := protocol.BuildJobMessage(uint64(job.JobID), job.ServerNonce)
 	if err != nil {
 		slog.Error("error building job message", "error", err)
@@ -222,7 +223,7 @@ func (s *Server) broadcastJob(job ServerJob) {
 	}
 
 	s.mu.RLock()
-	targets := make([]*client.Client, 0, len(s.clients))
+	targets := make([]*session.Session, 0, len(s.clients))
 	for _, c := range s.clients {
 		if c.IsAuthenticated() {
 			targets = append(targets, c)

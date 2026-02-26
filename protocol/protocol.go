@@ -50,12 +50,12 @@ func (m *Message) parseParams() error {
 	return nil
 }
 
-func BuildResponse(id uint64, err error) *response {
+func BuildResponse(id uint64, err error) *Response {
 	if err != nil {
 		return buildErrorResponse(id, err)
 	}
 
-	return &response{
+	return &Response{
 		ID:     id,
 		Result: true,
 	}
@@ -78,9 +78,9 @@ func BuildJobMessage(jobID uint64, serverNonce string) (*ServerMessage, error) {
 	}, nil
 }
 
-func buildErrorResponse(msgID uint64, err error) *response {
+func buildErrorResponse(msgID uint64, err error) *Response {
 	if err != nil {
-		return &response{
+		return &Response{
 			ID:     msgID,
 			Result: false,
 			Error:  err.Error(),

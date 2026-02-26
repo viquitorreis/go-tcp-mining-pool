@@ -6,18 +6,19 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"tcp_luxor/client"
+	"tcp_luxor/pool/dispatcher"
+	"tcp_luxor/pool/session"
 	"tcp_luxor/protocol"
 	"time"
 )
 
-type Handler func(c *client.Client, m *protocol.Message) error
+type Handler func(se *session.Session, m *protocol.Message) error
 
-func (s *Server) SessionHandler(c *client.Client, m *protocol.Message) error {
-	return s.router.Dispatch(c, m)
+func (s *Server) SessionHandler(se *session.Session, m *protocol.Message) error {
+	return s.router.Dispatch(se, m)
 }
 
-func (s *Server) HandleAuth(c *client.Client, m *protocol.Message) error {
+func (s *Server) HandleAuth(se *session.Session, m *protocol.Message) error {
 	if m.AuthParams == nil {
 		return fmt.Errorf("missing auth params")
 	}
@@ -30,30 +31,39 @@ func (s *Server) HandleAuth(c *client.Client, m *protocol.Message) error {
 		return fmt.Errorf("auth messages must include a proper id: %d\n", m.ID)
 	}
 
-	c.Authenticate(m.AuthParams.Username)
+	s.mu.RLock()
+	for _, client := range s.clients {
+		if strings.EqualFold(client.GetUsername(), m.AuthParams.Username) {
+			s.mu.RUnlock()
+			return ErrMinerAlreadyExists
+		}
+	}
+	s.mu.RUnlock()
 
-	s.write(c, protocol.BuildResponse(m.ID, nil))
+	se.Authenticate(m.AuthParams.Username)
+
+	s.write(se, protocol.BuildResponse(m.ID, nil))
 
 	return nil
 }
 
-func (s *Server) HandleSubmit(c *client.Client, m *protocol.Message) error {
-	log.Printf("mocking submit for client: %s\n", string(c.GetID()))
+func (s *Server) HandleSubmit(se *session.Session, m *protocol.Message) error {
+	log.Printf("mocking submit for client: %s\n", string(se.GetSessionID()))
 
 	if m.SubmitParams.JobID <= 0 {
 		return ErrInvalidJob
 	}
 
-	if time.Since(c.GetLastSubmitAt()) < time.Second {
+	if time.Since(se.GetLastSubmitAt()) < time.Second {
 		return ErrRateLimit
 	}
 
-	serverNonce, exists := s.dispatcher.GetNonce(JobID(m.SubmitParams.JobID))
+	serverNonce, exists := s.dispatcher.GetNonce(dispatcher.JobID(m.SubmitParams.JobID))
 	if !exists {
 		return ErrInexistentServerNonce
 	}
 
-	if c.HasNonce(m.SubmitParams.ClientNonce) {
+	if se.HasNonce(m.SubmitParams.ClientNonce) {
 		return ErrDuplicateNonce
 	}
 
@@ -67,14 +77,14 @@ func (s *Server) HandleSubmit(c *client.Client, m *protocol.Message) error {
 		return ErrInvalidResult
 	}
 
-	c.UpdateTimeSubmit()
-	c.SetNonce(m.SubmitParams.ClientNonce)
+	se.UpdateTimeSubmit()
+	se.SetNonce(m.SubmitParams.ClientNonce)
 
 	s.mu.Lock()
-	s.stats[c.GetUsername()]++
+	s.stats[se.GetUsername()]++
 	s.mu.Unlock()
 
-	s.write(c, protocol.BuildResponse(m.ID, nil))
+	s.write(se, protocol.BuildResponse(m.ID, nil))
 
 	return nil
 }

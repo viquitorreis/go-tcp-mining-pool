@@ -33,7 +33,7 @@ type Message struct {
 	SubmitParams *SubmitParams
 }
 
-type response struct {
+type Response struct {
 	ID     uint64 `json:"id"`
 	Result bool   `json:"result"`
 	Error  string `json:"error_message,omitempty"`

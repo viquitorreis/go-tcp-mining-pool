@@ -1,18 +1,18 @@
 package server
 
 import (
-	"tcp_luxor/client"
+	"tcp_luxor/pool/session"
 	"tcp_luxor/protocol"
 )
 
 type Middleware func(Handler) Handler
 
 func (s *Server) AuthMiddleware(next Handler) Handler {
-	return func(c *client.Client, m *protocol.Message) error {
-		if !c.IsAuthenticated() {
+	return func(s *session.Session, m *protocol.Message) error {
+		if !s.IsAuthenticated() {
 			return ErrUnauthorized
 		}
 
-		return next(c, m)
+		return next(s, m)
 	}
 }

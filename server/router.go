@@ -2,7 +2,7 @@ package server
 
 import (
 	"log/slog"
-	"tcp_luxor/client"
+	"tcp_luxor/pool/session"
 	"tcp_luxor/protocol"
 )
 
@@ -29,11 +29,11 @@ func (r *Router) Register(method protocol.Method, h Handler, middlewares ...Midd
 	r.routes[method] = h
 }
 
-func (r *Router) Dispatch(c *client.Client, m *protocol.Message) error {
+func (r *Router) Dispatch(se *session.Session, m *protocol.Message) error {
 	h, ok := r.routes[m.Method]
 	if !ok {
 		slog.Error("unknown method", "method", m.Method)
 		return ErrUnknownMethod
 	}
-	return h(c, m)
+	return h(se, m)
 }

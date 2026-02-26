@@ -11,4 +11,5 @@ var (
 	ErrDuplicateNonce        = errors.New("duplicate submission")
 	ErrInvalidResult         = errors.New("invalid result")
 	ErrInexistentServerNonce = errors.New("task does not exist")
+	ErrMinerAlreadyExists    = errors.New("miner already exists")
 )
