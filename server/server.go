@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -15,13 +16,15 @@ import (
 )
 
 type Server struct {
-	port     string
-	clients  map[client.ClienID]*client.Client
-	listener net.Listener
-	router   *Router
+	port       string
+	clients    map[client.ClienID]*client.Client
+	listener   net.Listener
+	router     *Router
+	dispatcher *Dispatcher
+	jobsChan   chan ServerJob
 
 	wg sync.WaitGroup
-	mu sync.Mutex
+	mu sync.RWMutex
 }
 
 type IServer interface {
@@ -30,10 +33,14 @@ type IServer interface {
 }
 
 func NewServer(p string) IServer {
+	jobsCh := make(chan ServerJob)
+
 	return &Server{
-		port:    p,
-		clients: make(map[client.ClienID]*client.Client),
-		router:  NewRouter(),
+		port:       p,
+		clients:    make(map[client.ClienID]*client.Client),
+		router:     NewRouter(),
+		dispatcher: BoostrapDispatcher(jobsCh),
+		jobsChan:   jobsCh,
 	}
 }
 
@@ -54,6 +61,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}()
 
 	go s.RouteManager()
+	go s.ListenJobManager(ctx)
 
 	for {
 		conn, err := listener.Accept()
@@ -123,15 +131,15 @@ func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
 	clientWg.Wait()
 }
 
-func (s *Server) readLoop(ctx context.Context, client *client.Client) {
-	reader := bufio.NewReader(client.Conn)
+func (s *Server) readLoop(ctx context.Context, c *client.Client) {
+	reader := bufio.NewReader(c.Conn)
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("context expired while trying to read from client")
 			return
 		default:
-			msg, err := reader.ReadString('\n')
+			line, err := reader.ReadBytes('\n')
 			if err != nil {
 				if err == io.EOF {
 					return
@@ -142,20 +150,21 @@ func (s *Server) readLoop(ctx context.Context, client *client.Client) {
 					return
 				}
 
-				slog.Error("error while reading from client", "client_id", client.ID, "error", err)
+				slog.Error("error while reading from client", "client_id", c.ID, "error", err)
 				return
 			}
 
-			msgJSON, err := protocol.ReadJSON(msg)
+			msg, err := protocol.Parse(line)
 			if err != nil {
+				slog.Warn("invalid message", "client_id", c.ID, "error", err)
 				continue
 			}
 
 			log.Printf("client: %s sent message: id=%d method=%s params=%s\n",
-				client.ID, msgJSON.ID, msgJSON.Method.ToString(), string(msgJSON.Params))
+				c.ID, msg.ID, msg.Method.ToString(), string(msg.Params))
 
-			if err := s.SessionHandler(client, msgJSON); err != nil {
-				slog.Error("error handling session handler", "client_id", client.ID, "error", err)
+			if err := s.SessionHandler(c, msg); err != nil {
+				slog.Error("error handling session handler", "client_id", c.ID, "error", err)
 				continue
 			}
 
@@ -170,13 +179,6 @@ func (s *Server) removeClient(id client.ClienID) {
 	s.mu.Unlock()
 }
 
-// type Client struct {
-// 	ID            uuid.UUID
-// 	Conn          net.Conn
-// 	Username      string
-// 	Authenticated bool
-// }
-
 func (s *Server) ReadAllClients() {
 	s.mu.Lock()
 	for id, client := range s.clients {
@@ -184,4 +186,52 @@ func (s *Server) ReadAllClients() {
 			id, client.Username, client.Authenticated, client.StartedAt.String())
 	}
 	s.mu.Unlock()
+}
+
+func (s *Server) write(c *client.Client, msg any) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		slog.Error("error marshaling response", "client_id", c.ID, "error", err)
+		return
+	}
+
+	data = append(data, '\n')
+	_, err = c.Conn.Write(data)
+	if err != nil {
+		slog.Error("error while writing message on client", "client_id", c.ID, "error", err)
+		return
+	}
+}
+
+func (s *Server) ListenJobManager(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-s.jobsChan:
+			log.Println("new job received, broadcasting to clients")
+			s.broadcastJob(job)
+		}
+	}
+}
+
+func (s *Server) broadcastJob(job ServerJob) {
+	msg, err := protocol.BuildJobMessage(uint64(job.JobID), job.ServerNonce)
+	if err != nil {
+		slog.Error("error building job message", "error", err)
+		return
+	}
+
+	s.mu.RLock()
+	targets := make([]*client.Client, 0, len(s.clients))
+	for _, c := range s.clients {
+		if c.Authenticated {
+			targets = append(targets, c)
+		}
+	}
+	s.mu.RUnlock()
+
+	for _, c := range targets {
+		s.write(c, msg)
+	}
 }

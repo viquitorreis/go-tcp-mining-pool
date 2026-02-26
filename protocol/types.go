@@ -24,7 +24,7 @@ func (m Method) ToString() string {
 }
 
 type Message struct {
-	ID     int             `json:"id"`
+	ID     uint64          `json:"id"`
 	Method Method          `json:"method"`
 	Params json.RawMessage `json:"params"`
 
@@ -34,9 +34,15 @@ type Message struct {
 }
 
 type Response struct {
-	ID     int    `json:"id"`
+	ID     uint64 `json:"id"`
 	Result bool   `json:"result"`
-	Error  string `json:"error_message"`
+	Error  string `json:"error_message,omitempty"`
+}
+
+type ServerMessage struct {
+	ID     *uint64         `json:"id"`
+	Method Method          `json:"method"`
+	Params json.RawMessage `json:"params"`
 }
 
 type AuthParams struct {
@@ -44,12 +50,12 @@ type AuthParams struct {
 }
 
 type JobParams struct {
-	JobID       int    `json:"job_id"`
+	JobID       uint64 `json:"job_id"`
 	ServerNonce string `json:"server_nonce`
 }
 
 type SubmitParams struct {
-	JobID       int    `json:"job_id"`
+	JobID       uint64 `json:"job_id"`
 	ClientNonce string `json:"client_nonce"`
 	Result      string `json:"result"`
 }

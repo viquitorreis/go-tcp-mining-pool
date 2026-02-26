@@ -32,6 +32,8 @@ func (s *Server) HandleAuth(client *client.Client, m *protocol.Message) error {
 	s.clients[client.ID].Authenticated = true
 	s.mu.Unlock()
 
+	s.write(client, protocol.BuildAuthResponse(m.ID, true))
+
 	return nil
 }
 
