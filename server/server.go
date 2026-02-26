@@ -11,6 +11,7 @@ import (
 	"net"
 	"sync"
 	"tcp_luxor/client"
+	"tcp_luxor/infra/db"
 	"tcp_luxor/protocol"
 	"time"
 )
@@ -21,6 +22,8 @@ type Server struct {
 	listener   net.Listener
 	router     *Router
 	dispatcher IDispatcher
+	stats      map[string]int // username -> submssion count
+	conn       *db.DB
 	jobsChan   chan ServerJob
 
 	wg sync.WaitGroup
@@ -40,6 +43,7 @@ func NewServer(p string) IServer {
 		clients:    make(map[client.ClientID]*client.Client),
 		router:     NewRouter(),
 		dispatcher: NewDispatcher(time.Second*5, jobsCh),
+		stats:      make(map[string]int),
 		jobsChan:   jobsCh,
 	}
 }
@@ -54,6 +58,12 @@ func (s *Server) Start(ctx context.Context) error {
 
 	slog.Info("Server UP and running", "port", s.port)
 
+	s.conn, err = db.New(ctx)
+	if err != nil {
+		slog.Error("error while starting database", "error", err)
+		return err
+	}
+
 	s.dispatcher.Bootstrap()
 
 	// cancelar o Accept quando o ctx terminar
@@ -65,6 +75,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.RouteManager()
 
 	go s.ListenDispatcher(ctx)
+	go s.runStatsCollector(ctx)
 
 	for {
 		conn, err := listener.Accept()
@@ -187,11 +198,8 @@ func (s *Server) write(c *client.Client, msg any) {
 	}
 
 	data = append(data, '\n')
-	_, err = c.GetConn().Write(data)
-	if err != nil {
-		slog.Error("error while writing message on client", "client_id", c.GetID(), "error", err)
-		return
-	}
+
+	c.Write(data)
 }
 
 func (s *Server) ListenDispatcher(ctx context.Context) {
@@ -224,5 +232,56 @@ func (s *Server) broadcastJob(job ServerJob) {
 
 	for _, c := range targets {
 		s.write(c, msg)
+	}
+}
+
+func (s *Server) runStatsCollector(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.flushStats(ctx)
+		}
+	}
+}
+
+func (s *Server) flushStats(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	s.mu.Lock()
+	snapshot := s.stats
+	s.stats = make(map[string]int)
+	s.mu.Unlock()
+
+	if len(snapshot) == 0 {
+		return
+	}
+
+	now := time.Now()
+	models := make([]db.SubmissionStatModel, 0, len(snapshot))
+
+	for username, count := range snapshot {
+		models = append(models, db.SubmissionStatModel{
+			Username:        username,
+			SubmissionCount: count,
+			Timestamp:       now,
+		})
+	}
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, time.Second*10)
+	defer cancel()
+
+	if err := s.conn.UpsertSubmissions(ctxTimeout, models); err != nil {
+		slog.Error("error flushing stats, re-queuing for next cycle", "error", err)
+		s.mu.Lock()
+		for _, m := range models {
+			s.stats[m.Username] += m.SubmissionCount
+		}
+		s.mu.Unlock()
 	}
 }

@@ -20,9 +20,22 @@ System Goals:
 - [ ] Implement Client
 - [ ] Implement Auth Flow
 
+## Testing:
+
+**Auth**
+
 {"id":30,"method":"authorize","params":{"username": "admin"}}
+{"id":30,"method":"authorize","params":{"username": "user"}}
 
-{"id":1,"method":"job","params":{"job_id":1,"server_nonce":"123"}}
+**Submit**
 
-{"id":30,"method":"job","params":{"job_id":1,"server_nonce":"123"}}
-{"id":33,"method":"job","params":{"job_id":2,"server_nonce":"987"}}
+```
+echo -n "<server_nonce><client_nonce>" | sha256sum
+```
+
+echo -n "e4c6cc43dcfd249975542dfc49c62cab123" | sha256sum
+
+{"id":null,"method":"job","params":{"job_id":43,"server_nonce":"e4c6cc43dcfd249975542dfc49c62cab"}}
+{"id":null,"method":"job","params":{"job_id":43,"server_nonce":"02d2254e01cc607c526137e24af40639"}}
+
+{"id":2,"method":"submit","params":{"job_id":43,"client_nonce":"123","result":"742ca7388a21d05b49ca1c2ea330b2d4507cb2dc6ce5bce84757c0b3ffc925ec"}}

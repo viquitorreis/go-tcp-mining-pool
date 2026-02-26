@@ -50,7 +50,7 @@ func (s *Server) HandleSubmit(c *client.Client, m *protocol.Message) error {
 
 	serverNonce, exists := s.dispatcher.GetNonce(JobID(m.SubmitParams.JobID))
 	if !exists {
-		return ErrInvalidServerNonce
+		return ErrInexistentServerNonce
 	}
 
 	if c.HasNonce(m.SubmitParams.ClientNonce) {
@@ -69,6 +69,10 @@ func (s *Server) HandleSubmit(c *client.Client, m *protocol.Message) error {
 
 	c.UpdateTimeSubmit()
 	c.SetNonce(m.SubmitParams.ClientNonce)
+
+	s.mu.Lock()
+	s.stats[c.GetUsername()]++
+	s.mu.Unlock()
 
 	s.write(c, protocol.BuildResponse(m.ID, nil))
 

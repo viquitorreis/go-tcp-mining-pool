@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -16,12 +17,13 @@ type Client struct {
 	username      string
 	authenticated bool
 	usedNonces    map[string]bool
-	currentJobID  uint64
+	currentJobID  uint64 // TODO
 
 	startedAt    time.Time
 	lastSubmitAt time.Time
 
-	mu sync.RWMutex
+	mu      sync.RWMutex
+	writeMu sync.Mutex // tcp writes only
 }
 
 func NewClient(numClients int, conn net.Conn) *Client {
@@ -36,6 +38,14 @@ func NewClient(numClients int, conn net.Conn) *Client {
 func newClientID(numClients int) ClientID {
 	host, _ := os.Hostname()
 	return ClientID(fmt.Sprintf("%d_%s", numClients+1, host))
+}
+
+func (c *Client) Write(data []byte) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if _, err := c.conn.Write(data); err != nil {
+		slog.Error("error writing to client", "client_id", c.id, "error", err)
+	}
 }
 
 func (c *Client) GetConn() net.Conn {
@@ -54,6 +64,12 @@ func (c *Client) GetID() ClientID {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.id
+}
+
+func (c *Client) GetUsername() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.username
 }
 
 func (c *Client) Authenticate(username string) {
