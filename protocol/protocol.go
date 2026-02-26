@@ -3,7 +3,6 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 )
 
 func Parse(data []byte) (*Message, error) {
@@ -28,24 +27,21 @@ func (m *Message) parseParams() error {
 	case MethodAuthorize:
 		var params AuthParams
 		if err := json.Unmarshal(m.Params, &params); err != nil {
-			slog.Error("error unmarshaling mesage job method", "message_id", m.ID, "error", err)
-			return err
+			return fmt.Errorf("error unmarshaling message for authorize method message_id:%d error:%w", m.ID, err)
 		}
 
 		m.AuthParams = &params
 	case MethodJob:
 		var params JobParams
 		if err := json.Unmarshal(m.Params, &params); err != nil {
-			slog.Error("error unmarshaling mesage job method", "message_id", m.ID, "error", err)
-			return err
+			return fmt.Errorf("error unmarshaling message for job method message_id:%d error:%w", m.ID, err)
 		}
 
 		m.JobParams = &params
 	case MethodSubmit:
 		var params SubmitParams
 		if err := json.Unmarshal(m.Params, &params); err != nil {
-			slog.Error("error unmarshaling mesage job method", "message_id", m.ID, "error", err)
-			return err
+			return fmt.Errorf("error unmarshaling message for submit method message_id:%d error:%w", m.ID, err)
 		}
 
 		m.SubmitParams = &params
@@ -54,8 +50,12 @@ func (m *Message) parseParams() error {
 	return nil
 }
 
-func BuildAuthResponse(id uint64, result bool) Response {
-	return Response{
+func BuildAuthResponse(id uint64, result bool, err error) *response {
+	if !result {
+		return BuildErrorResponse(id, err)
+	}
+
+	return &response{
 		ID:     id,
 		Result: result,
 	}
@@ -66,9 +66,11 @@ func BuildJobMessage(jobID uint64, serverNonce string) (*ServerMessage, error) {
 		JobID:       jobID,
 		ServerNonce: serverNonce,
 	})
+
 	if err != nil {
 		return nil, fmt.Errorf("error building job message: %w", err)
 	}
+
 	return &ServerMessage{
 		ID:     nil,
 		Method: MethodJob,

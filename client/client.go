@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-type ClienID string
+type ClientID string
 
 type Client struct {
-	ID            ClienID
+	ID            ClientID
 	Conn          net.Conn
 	Username      string
 	Authenticated bool
@@ -18,7 +18,7 @@ type Client struct {
 	StartedAt time.Time
 }
 
-func NewClientID(numClients int) ClienID {
+func NewClientID(numClients int) ClientID {
 	host, _ := os.Hostname()
-	return ClienID(fmt.Sprintf("%d_%s", numClients+1, host))
+	return ClientID(fmt.Sprintf("%d_%s", numClients+1, host))
 }

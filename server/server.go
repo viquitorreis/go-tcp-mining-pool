@@ -17,10 +17,10 @@ import (
 
 type Server struct {
 	port       string
-	clients    map[client.ClienID]*client.Client
+	clients    map[client.ClientID]*client.Client
 	listener   net.Listener
 	router     *Router
-	dispatcher *Dispatcher
+	dispatcher IDispatcher
 	jobsChan   chan ServerJob
 
 	wg sync.WaitGroup
@@ -37,9 +37,9 @@ func NewServer(p string) IServer {
 
 	return &Server{
 		port:       p,
-		clients:    make(map[client.ClienID]*client.Client),
+		clients:    make(map[client.ClientID]*client.Client),
 		router:     NewRouter(),
-		dispatcher: BoostrapDispatcher(jobsCh),
+		dispatcher: NewDispatcher(time.Second*5, jobsCh),
 		jobsChan:   jobsCh,
 	}
 }
@@ -52,7 +52,9 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	s.listener = listener
 
-	log.Printf("Server listening on port: %s\n", s.port)
+	slog.Info("Server UP and running", "port", s.port)
+
+	s.dispatcher.Bootstrap()
 
 	// cancelar o Accept quando o ctx terminar
 	go func() {
@@ -60,8 +62,9 @@ func (s *Server) Start(ctx context.Context) error {
 		listener.Close()
 	}()
 
-	go s.RouteManager()
-	go s.ListenJobManager(ctx)
+	s.RouteManager()
+
+	go s.ListenDispatcher(ctx)
 
 	for {
 		conn, err := listener.Accept()
@@ -93,13 +96,14 @@ func (s *Server) Stop() {
 	s.mu.Unlock()
 
 	s.wg.Wait()
-	log.Println("server stopped gracefully")
+
+	slog.Info("server stopped gracefully")
 }
 
 func (s *Server) RouteManager() {
 	s.router.Register(protocol.MethodAuthorize, s.HandleAuth)
 
-	s.router.Register(protocol.MethodJob, s.HandleJob, s.AuthMiddleware)
+	// s.router.Register(protocol.MethodJob, s.HandleJob, s.AuthMiddleware)
 	s.router.Register(protocol.MethodSubmit, s.HandleSubmit, s.AuthMiddleware)
 }
 
@@ -116,10 +120,10 @@ func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
 	s.clients[client.ID] = client
 	s.mu.Unlock()
 
-	log.Println("new client connected", client.ID)
+	slog.Info("new client connected", "client_id", client.ID)
 
 	defer func() {
-		log.Println("client disconnected", client.ID)
+		slog.Info("client disconnected", "client_id", client.ID)
 		s.removeClient(client.ID)
 	}()
 
@@ -136,7 +140,7 @@ func (s *Server) readLoop(ctx context.Context, c *client.Client) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("context expired while trying to read from client")
+			slog.Warn("context expired while trying to read from client", "client_id", c.ID)
 			return
 		default:
 			line, err := reader.ReadBytes('\n')
@@ -160,31 +164,23 @@ func (s *Server) readLoop(ctx context.Context, c *client.Client) {
 				continue
 			}
 
+			// APAGAR
 			log.Printf("client: %s sent message: id=%d method=%s params=%s\n",
 				c.ID, msg.ID, msg.Method.ToString(), string(msg.Params))
 
 			if err := s.SessionHandler(c, msg); err != nil {
 				slog.Error("error handling session handler", "client_id", c.ID, "error", err)
+				s.write(c, protocol.BuildErrorResponse(msg.ID, err))
+
 				continue
 			}
-
-			s.ReadAllClients()
 		}
 	}
 }
 
-func (s *Server) removeClient(id client.ClienID) {
+func (s *Server) removeClient(id client.ClientID) {
 	s.mu.Lock()
 	delete(s.clients, id)
-	s.mu.Unlock()
-}
-
-func (s *Server) ReadAllClients() {
-	s.mu.Lock()
-	for id, client := range s.clients {
-		log.Printf("Client ID: %s, Username: %s, Authenticated: %t, StartedAt: %s\n",
-			id, client.Username, client.Authenticated, client.StartedAt.String())
-	}
 	s.mu.Unlock()
 }
 
@@ -203,13 +199,13 @@ func (s *Server) write(c *client.Client, msg any) {
 	}
 }
 
-func (s *Server) ListenJobManager(ctx context.Context) {
+func (s *Server) ListenDispatcher(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case job := <-s.jobsChan:
-			log.Println("new job received, broadcasting to clients")
+			slog.Info("new job received from dispatcher. Broadcasting to clients")
 			s.broadcastJob(job)
 		}
 	}

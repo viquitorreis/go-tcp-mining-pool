@@ -5,9 +5,9 @@ import "encoding/json"
 type Method string
 
 const (
-	MethodAuthorize = "authorize"
-	MethodJob       = "job"
-	MethodSubmit    = "submit"
+	MethodAuthorize Method = "authorize"
+	MethodJob       Method = "job"
+	MethodSubmit    Method = "submit"
 )
 
 func (m Method) IsValid() bool {
@@ -33,7 +33,7 @@ type Message struct {
 	SubmitParams *SubmitParams
 }
 
-type Response struct {
+type response struct {
 	ID     uint64 `json:"id"`
 	Result bool   `json:"result"`
 	Error  string `json:"error_message,omitempty"`
@@ -51,7 +51,7 @@ type AuthParams struct {
 
 type JobParams struct {
 	JobID       uint64 `json:"job_id"`
-	ServerNonce string `json:"server_nonce`
+	ServerNonce string `json:"server_nonce"`
 }
 
 type SubmitParams struct {

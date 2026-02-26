@@ -1,7 +1,7 @@
 package server
 
 import (
-	"fmt"
+	"log/slog"
 	"tcp_luxor/client"
 	"tcp_luxor/protocol"
 )
@@ -32,7 +32,8 @@ func (r *Router) Register(method protocol.Method, h Handler, middlewares ...Midd
 func (r *Router) Dispatch(c *client.Client, m *protocol.Message) error {
 	h, ok := r.routes[m.Method]
 	if !ok {
-		return fmt.Errorf("unknown method: %s", m.Method)
+		slog.Error("unknown method", "method", m.Method)
+		return protocol.ErrUnknownMethod
 	}
 	return h(c, m)
 }
