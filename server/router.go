@@ -33,7 +33,7 @@ func (r *Router) Dispatch(c *client.Client, m *protocol.Message) error {
 	h, ok := r.routes[m.Method]
 	if !ok {
 		slog.Error("unknown method", "method", m.Method)
-		return protocol.ErrUnknownMethod
+		return ErrUnknownMethod
 	}
 	return h(c, m)
 }

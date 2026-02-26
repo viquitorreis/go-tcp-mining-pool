@@ -89,8 +89,8 @@ func (s *Server) Stop() {
 	s.mu.Lock()
 
 	for _, c := range s.clients {
-		c.Conn.Close()
-		delete(s.clients, c.ID)
+		c.CloseConn()
+		delete(s.clients, c.GetID())
 	}
 
 	s.mu.Unlock()
@@ -103,28 +103,23 @@ func (s *Server) Stop() {
 func (s *Server) RouteManager() {
 	s.router.Register(protocol.MethodAuthorize, s.HandleAuth)
 
-	// s.router.Register(protocol.MethodJob, s.HandleJob, s.AuthMiddleware)
 	s.router.Register(protocol.MethodSubmit, s.HandleSubmit, s.AuthMiddleware)
 }
 
 func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
-	client := &client.Client{
-		ID:        client.NewClientID(len(s.clients)),
-		Conn:      conn,
-		StartedAt: time.Now(),
-	}
+	client := client.NewClient(len(s.clients), conn)
 
 	s.mu.Lock()
-	s.clients[client.ID] = client
+	s.clients[client.GetID()] = client
 	s.mu.Unlock()
 
-	slog.Info("new client connected", "client_id", client.ID)
+	slog.Info("new client connected", "client_id", client.GetID())
 
 	defer func() {
-		slog.Info("client disconnected", "client_id", client.ID)
-		s.removeClient(client.ID)
+		slog.Info("client disconnected", "client_id", client.GetID())
+		s.removeClient(client.GetID())
 	}()
 
 	var clientWg sync.WaitGroup
@@ -136,11 +131,11 @@ func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
 }
 
 func (s *Server) readLoop(ctx context.Context, c *client.Client) {
-	reader := bufio.NewReader(c.Conn)
+	reader := bufio.NewReader(c.GetConn())
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Warn("context expired while trying to read from client", "client_id", c.ID)
+			slog.Warn("context expired while trying to read from client", "client_id", c.GetID())
 			return
 		default:
 			line, err := reader.ReadBytes('\n')
@@ -154,23 +149,23 @@ func (s *Server) readLoop(ctx context.Context, c *client.Client) {
 					return
 				}
 
-				slog.Error("error while reading from client", "client_id", c.ID, "error", err)
+				slog.Error("error while reading from client", "client_id", c.GetID(), "error", err)
 				return
 			}
 
 			msg, err := protocol.Parse(line)
 			if err != nil {
-				slog.Warn("invalid message", "client_id", c.ID, "error", err)
+				slog.Warn("invalid message", "client_id", c.GetID(), "error", err)
 				continue
 			}
 
 			// APAGAR
 			log.Printf("client: %s sent message: id=%d method=%s params=%s\n",
-				c.ID, msg.ID, msg.Method.ToString(), string(msg.Params))
+				c.GetID(), msg.ID, msg.Method.ToString(), string(msg.Params))
 
 			if err := s.SessionHandler(c, msg); err != nil {
-				slog.Error("error handling session handler", "client_id", c.ID, "error", err)
-				s.write(c, protocol.BuildErrorResponse(msg.ID, err))
+				slog.Error("error handling session handler", "client_id", c.GetID(), "error", err)
+				s.write(c, protocol.BuildResponse(msg.ID, err))
 
 				continue
 			}
@@ -187,14 +182,14 @@ func (s *Server) removeClient(id client.ClientID) {
 func (s *Server) write(c *client.Client, msg any) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		slog.Error("error marshaling response", "client_id", c.ID, "error", err)
+		slog.Error("error marshaling response", "client_id", c.GetID(), "error", err)
 		return
 	}
 
 	data = append(data, '\n')
-	_, err = c.Conn.Write(data)
+	_, err = c.GetConn().Write(data)
 	if err != nil {
-		slog.Error("error while writing message on client", "client_id", c.ID, "error", err)
+		slog.Error("error while writing message on client", "client_id", c.GetID(), "error", err)
 		return
 	}
 }
@@ -205,7 +200,7 @@ func (s *Server) ListenDispatcher(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case job := <-s.jobsChan:
-			slog.Info("new job received from dispatcher. Broadcasting to clients")
+			slog.Info("new job received from dispatcher. Broadcasting to clients.")
 			s.broadcastJob(job)
 		}
 	}
@@ -221,7 +216,7 @@ func (s *Server) broadcastJob(job ServerJob) {
 	s.mu.RLock()
 	targets := make([]*client.Client, 0, len(s.clients))
 	for _, c := range s.clients {
-		if c.Authenticated {
+		if c.IsAuthenticated() {
 			targets = append(targets, c)
 		}
 	}

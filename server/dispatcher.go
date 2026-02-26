@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"sync"
@@ -12,6 +14,7 @@ type JobID uint64
 type IDispatcher interface {
 	Bootstrap()
 	GetNonce(jobID JobID) (string, bool)
+	GetCurrentJob() *ServerJob
 }
 
 type Dispatcher struct {
@@ -41,6 +44,17 @@ func (d *Dispatcher) Bootstrap() {
 	go d.dispatch()
 }
 
+func (d *Dispatcher) generateNonce() string {
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	if err != nil {
+		// almost impossible error -> only on system without entropy
+		panic(fmt.Sprintf("failed to generate nonce: :%s", err.Error()))
+	}
+
+	return hex.EncodeToString(b)
+}
+
 func (d *Dispatcher) dispatch() {
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
@@ -52,7 +66,7 @@ func (d *Dispatcher) dispatch() {
 
 		job := &ServerJob{
 			JobID:       prev.JobID + 1,
-			ServerNonce: fmt.Sprintf("random:%s", time.Now().String()),
+			ServerNonce: d.generateNonce(),
 		}
 
 		d.History[job.JobID] = job.ServerNonce
@@ -76,4 +90,10 @@ func (d *Dispatcher) GetNonce(jobID JobID) (string, bool) {
 	log.Println("returning job: ", jobID, val)
 
 	return val, true
+}
+
+func (d *Dispatcher) GetCurrentJob() *ServerJob {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.Job
 }

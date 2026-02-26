@@ -22,5 +22,7 @@ System Goals:
 
 {"id":30,"method":"authorize","params":{"username": "admin"}}
 
+{"id":1,"method":"job","params":{"job_id":1,"server_nonce":"123"}}
+
 {"id":30,"method":"job","params":{"job_id":1,"server_nonce":"123"}}
 {"id":33,"method":"job","params":{"job_id":2,"server_nonce":"987"}}

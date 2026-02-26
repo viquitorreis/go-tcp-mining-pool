@@ -50,14 +50,14 @@ func (m *Message) parseParams() error {
 	return nil
 }
 
-func BuildAuthResponse(id uint64, result bool, err error) *response {
-	if !result {
-		return BuildErrorResponse(id, err)
+func BuildResponse(id uint64, err error) *response {
+	if err != nil {
+		return buildErrorResponse(id, err)
 	}
 
 	return &response{
 		ID:     id,
-		Result: result,
+		Result: true,
 	}
 }
 
@@ -76,4 +76,16 @@ func BuildJobMessage(jobID uint64, serverNonce string) (*ServerMessage, error) {
 		Method: MethodJob,
 		Params: params,
 	}, nil
+}
+
+func buildErrorResponse(msgID uint64, err error) *response {
+	if err != nil {
+		return &response{
+			ID:     msgID,
+			Result: false,
+			Error:  err.Error(),
+		}
+	}
+
+	return nil
 }
