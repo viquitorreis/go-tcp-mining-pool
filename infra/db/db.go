@@ -50,7 +50,6 @@ func (db *DB) RunMigrations(ctx context.Context) error {
 	`
 
 	if _, err := db.pool.Exec(ctx, query); err != nil {
-		slog.Error("error acquiring pool to run migrations", "errror", err)
 		return err
 	}
 

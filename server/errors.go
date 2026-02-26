@@ -3,13 +3,13 @@ package server
 import "errors"
 
 var (
-	ErrUnauthorized          = errors.New("unauthorized")
-	ErrUnknownMethod         = errors.New("unknown method")
-	ErrInvalidJob            = errors.New("invalid task")
-	ErrJobNotFound           = errors.New("job not found")
-	ErrRateLimit             = errors.New("submission too frequent")
-	ErrDuplicateNonce        = errors.New("duplicate submission")
-	ErrInvalidResult         = errors.New("invalid result")
-	ErrInexistentServerNonce = errors.New("task does not exist")
-	ErrMinerAlreadyExists    = errors.New("miner already exists")
+	ErrUnauthorized       = errors.New("Unauthorized")
+	ErrUnknownMethod      = errors.New("Unknown method")
+	ErrInvalidJob         = errors.New("Invalid task")
+	ErrJobNotFound        = errors.New("Job not found")
+	ErrRateLimit          = errors.New("Submission too frequent")
+	ErrDuplicateNonce     = errors.New("Duplicate submission")
+	ErrInvalidResult      = errors.New("Invalid result")
+	ErrTaskNotFound       = errors.New("Task does not exist")
+	ErrMinerAlreadyExists = errors.New("Miner already exists")
 )

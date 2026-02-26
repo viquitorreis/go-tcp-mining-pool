@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"tcp_luxor/infra/db"
 	"tcp_luxor/pool/dispatcher"
 	"tcp_luxor/pool/session"
@@ -25,26 +25,23 @@ type Server struct {
 	dispatcher dispatcher.IDispatcher
 	stats      map[string]int // username -> submssion count
 	conn       *db.DB
+	nextID     atomic.Uint64
 	jobsChan   chan dispatcher.ServerJob
 
 	wg sync.WaitGroup
 	mu sync.RWMutex
 }
 
-type IServer interface {
-	Start(ctx context.Context) error
-	Stop()
-}
-
-func NewServer(p string) IServer {
+func NewServer(port string, conn *db.DB) *Server {
 	jobsCh := make(chan dispatcher.ServerJob)
 
 	return &Server{
-		port:       p,
+		port:       port,
 		clients:    make(map[session.SessionID]*session.Session),
 		router:     NewRouter(),
 		dispatcher: dispatcher.NewDispatcher(time.Second*30, jobsCh),
 		stats:      make(map[string]int),
+		conn:       conn,
 		jobsChan:   jobsCh,
 	}
 }
@@ -55,7 +52,10 @@ func (s *Server) Start(ctx context.Context) error {
 		slog.Error("error starting tcp server", "error", err)
 		return err
 	}
+
+	s.mu.Lock()
 	s.listener = listener
+	s.mu.Unlock()
 
 	slog.Info("Server UP and running", "port", s.port)
 
@@ -74,7 +74,6 @@ func (s *Server) Start(ctx context.Context) error {
 	}()
 
 	s.RouteManager()
-
 	go s.ListenDispatcher(ctx)
 	go s.runStatsCollector(ctx)
 
@@ -99,12 +98,10 @@ func (s *Server) Start(ctx context.Context) error {
 
 func (s *Server) Stop() {
 	s.mu.Lock()
-
 	for _, c := range s.clients {
 		c.CloseConn()
 		delete(s.clients, c.GetSessionID())
 	}
-
 	s.mu.Unlock()
 
 	s.wg.Wait()
@@ -121,7 +118,8 @@ func (s *Server) RouteManager() {
 func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
-	session := session.NewSession(len(s.clients), conn)
+	id := s.nextID.Add(1)
+	session := session.NewSession(id, conn)
 
 	s.mu.Lock()
 	s.clients[session.GetSessionID()] = session
@@ -136,18 +134,18 @@ func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
 
 	var clientWg sync.WaitGroup
 	clientWg.Go(func() {
-		s.readLoop(ctx, session)
+		s.handleSession(ctx, session)
 	})
 
 	clientWg.Wait()
 }
 
-func (s *Server) readLoop(ctx context.Context, c *session.Session) {
-	reader := bufio.NewReader(c)
+func (s *Server) handleSession(ctx context.Context, session *session.Session) {
+	reader := bufio.NewReader(session)
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Warn("context expired while trying to read from client", "session_id", c.GetSessionID())
+			slog.Warn("context expired while trying to read from client", "session_id", session.GetSessionID())
 			return
 		default:
 			line, err := reader.ReadBytes('\n')
@@ -161,23 +159,19 @@ func (s *Server) readLoop(ctx context.Context, c *session.Session) {
 					return
 				}
 
-				slog.Error("error while reading from client", "session_id", c.GetSessionID(), "error", err)
+				slog.Error("error while reading from client", "session_id", session.GetSessionID(), "error", err)
 				return
 			}
 
 			msg, err := protocol.Parse(line)
 			if err != nil {
-				slog.Warn("invalid message", "session_id", c.GetSessionID(), "error", err)
+				slog.Warn("invalid message", "session_id", session.GetSessionID(), "error", err)
 				continue
 			}
 
-			// APAGAR
-			log.Printf("client: %s sent message: id=%d method=%s params=%s\n",
-				c.GetSessionID(), msg.ID, msg.Method.ToString(), string(msg.Params))
-
-			if err := s.SessionHandler(c, msg); err != nil {
-				slog.Error("error handling session handler", "session_id", c.GetSessionID(), "error", err)
-				s.write(c, protocol.BuildResponse(msg.ID, err))
+			if err := s.SessionHandler(session, msg); err != nil {
+				slog.Error("error handling session handler", "session_id", session.GetSessionID(), "error", err)
+				s.write(session, protocol.BuildResponse(msg.ID, err))
 
 				continue
 			}
@@ -224,15 +218,15 @@ func (s *Server) broadcastJob(job dispatcher.ServerJob) {
 
 	s.mu.RLock()
 	targets := make([]*session.Session, 0, len(s.clients))
-	for _, c := range s.clients {
-		if c.IsAuthenticated() {
-			targets = append(targets, c)
+	for _, session := range s.clients {
+		if session.IsAuthenticated() {
+			targets = append(targets, session)
 		}
 	}
 	s.mu.RUnlock()
 
-	for _, c := range targets {
-		s.write(c, msg)
+	for _, session := range targets {
+		session.Write(msg)
 	}
 }
 
@@ -250,7 +244,7 @@ func (s *Server) runStatsCollector(ctx context.Context) {
 }
 
 func (s *Server) flushStats(ctx context.Context) {
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || s.conn == nil {
 		return
 	}
 

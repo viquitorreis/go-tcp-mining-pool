@@ -29,11 +29,11 @@ type ISession interface {
 	Read(buf []byte) (int, error)
 }
 
-func NewSession(numSessions int, conn net.Conn) *Session {
+func NewSession(id uint64, conn net.Conn) *Session {
 	host, _ := os.Hostname()
-	id := SessionID(fmt.Sprintf("%d_%s", numSessions+1, host))
+	sessionID := SessionID(fmt.Sprintf("%d_%s", id, host))
 	return &Session{
-		id:         id,
+		id:         sessionID,
 		conn:       conn,
 		startedAt:  time.Now(),
 		usedNonces: make(map[string]bool),

@@ -60,13 +60,16 @@ func (m *Miner) Connect(ctx context.Context) error {
 }
 
 func (m *Miner) authenticate() error {
-	msg := protocol.Message{
-		ID:     m.nextID(),
-		Method: protocol.MethodAuthorize,
+	msg, err := protocol.BuildMessage(
+		m.nextID(),
+		protocol.MethodAuthorize,
+		protocol.AuthParams{
+			Username: m.username,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to build auth message: %w", err)
 	}
-
-	params, _ := json.Marshal(protocol.AuthParams{Username: m.username})
-	msg.Params = params
 
 	if err := m.send(msg); err != nil {
 		return err
@@ -101,11 +104,11 @@ func (m *Miner) Run(ctx context.Context) error {
 	errChan := make(chan error, 2)
 
 	go func() {
-		errChan <- m.readLoop(runCtx)
+		errChan <- m.receiveJobs(runCtx)
 	}()
 
 	go func() {
-		errChan <- m.submitLoop(runCtx)
+		errChan <- m.processJobs(runCtx)
 	}()
 
 	select {
@@ -116,7 +119,7 @@ func (m *Miner) Run(ctx context.Context) error {
 	}
 }
 
-func (m *Miner) readLoop(ctx context.Context) error {
+func (m *Miner) receiveJobs(ctx context.Context) error {
 	for {
 		line, err := m.reader.ReadBytes('\n')
 		if err != nil {
@@ -156,7 +159,7 @@ func (m *Miner) readLoop(ctx context.Context) error {
 	}
 }
 
-func (m *Miner) submitLoop(ctx context.Context) error {
+func (m *Miner) processJobs(ctx context.Context) error {
 	maxWait := time.NewTicker(time.Minute)
 	defer maxWait.Stop()
 
@@ -198,37 +201,33 @@ func (m *Miner) submit(ctx context.Context, job *protocol.JobParams) error {
 
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Errorf("failed to generate nonce: %w", err)
+		// almost impossible error -> only on system without entropy
+		panic(fmt.Sprintf("failed to generate nonce: :%s", err.Error()))
 	}
 
 	clientNonce := hex.EncodeToString(b)
 
 	h := sha256.Sum256([]byte(job.ServerNonce + clientNonce))
-	result := hex.EncodeToString(h[:])
 
-	params, _ := json.Marshal(protocol.SubmitParams{
-		JobID:       job.JobID,
-		ClientNonce: clientNonce,
-		Result:      result,
-	})
-
-	msg := protocol.Message{
-		ID:     m.nextID(),
-		Method: protocol.MethodSubmit,
-		Params: params,
+	msg, err := protocol.BuildMessage(
+		m.nextID(),
+		protocol.MethodSubmit,
+		protocol.SubmitParams{
+			JobID:       job.JobID,
+			ClientNonce: clientNonce,
+			Result:      hex.EncodeToString(h[:]),
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to build submit message: %w", err)
 	}
 
 	slog.Info("submitting", "job_id", job.JobID, "client_nonce", clientNonce)
+
 	return m.send(msg)
 }
 
-func (m *Miner) send(msg any) error {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("marshal error: %w", err)
-	}
-
-	data = append(data, '\n')
-	_, err = m.conn.Write(data)
+func (m *Miner) send(data []byte) error {
+	_, err := m.conn.Write(data)
 	return err
 }

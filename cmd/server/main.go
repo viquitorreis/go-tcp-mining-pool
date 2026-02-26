@@ -6,16 +6,23 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"tcp_luxor/infra/db"
 	"tcp_luxor/server"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
-	server := server.NewServer("12345")
+	ctx, cancel := context.WithCancel(context.Background())
+
+	conn, err := db.New(ctx)
+	if err != nil {
+		log.Fatalf("error connecting to database: %s", err)
+	}
+
+	server := server.NewServer("12345", conn)
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
 		if err := server.Start(ctx); err != nil {

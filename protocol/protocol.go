@@ -22,6 +22,26 @@ func Parse(data []byte) (*Message, error) {
 	return &msg, nil
 }
 
+func BuildMessage(id uint64, method Method, params any) ([]byte, error) {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling params for %s: %w", method, err)
+	}
+
+	msg := Message{
+		ID:     id,
+		Method: method,
+		Params: raw,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling message: %w", err)
+	}
+
+	return append(data, '\n'), nil
+}
+
 func (m *Message) parseParams() error {
 	switch m.Method {
 	case MethodAuthorize:
@@ -61,7 +81,7 @@ func BuildResponse(id uint64, err error) *Response {
 	}
 }
 
-func BuildJobMessage(jobID uint64, serverNonce string) (*ServerMessage, error) {
+func BuildJobMessage(jobID uint64, serverNonce string) ([]byte, error) {
 	params, err := json.Marshal(JobParams{
 		JobID:       jobID,
 		ServerNonce: serverNonce,
@@ -71,11 +91,18 @@ func BuildJobMessage(jobID uint64, serverNonce string) (*ServerMessage, error) {
 		return nil, fmt.Errorf("error building job message: %w", err)
 	}
 
-	return &ServerMessage{
+	msg := ServerMessage{
 		ID:     nil,
 		Method: MethodJob,
 		Params: params,
-	}, nil
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling job message: %w", err)
+	}
+
+	return append(data, '\n'), nil
 }
 
 func buildErrorResponse(msgID uint64, err error) *Response {

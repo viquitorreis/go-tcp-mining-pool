@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"strings"
 	"tcp_luxor/pool/dispatcher"
 	"tcp_luxor/pool/session"
@@ -48,8 +47,6 @@ func (s *Server) HandleAuth(se *session.Session, m *protocol.Message) error {
 }
 
 func (s *Server) HandleSubmit(se *session.Session, m *protocol.Message) error {
-	log.Printf("mocking submit for client: %s\n", string(se.GetSessionID()))
-
 	if m.SubmitParams.JobID <= 0 {
 		return ErrInvalidJob
 	}
@@ -60,7 +57,7 @@ func (s *Server) HandleSubmit(se *session.Session, m *protocol.Message) error {
 
 	serverNonce, exists := s.dispatcher.GetNonce(dispatcher.JobID(m.SubmitParams.JobID))
 	if !exists {
-		return ErrInexistentServerNonce
+		return ErrTaskNotFound
 	}
 
 	if se.HasNonce(m.SubmitParams.ClientNonce) {

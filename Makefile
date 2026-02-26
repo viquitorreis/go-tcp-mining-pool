@@ -15,6 +15,9 @@ new-miner:
 setup:
 	@docker compose up -d
 
+test:
+	@go test ./... --race
+
 clean:
 	@docker compose down -v
 	@rm -rf bin
