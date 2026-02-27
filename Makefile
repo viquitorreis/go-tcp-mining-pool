@@ -1,4 +1,4 @@
-.PHONY: build execute clean setup
+.PHONY: build execute new-miner clean setup test
 
 BIN_NAME=tcp_luxor
 

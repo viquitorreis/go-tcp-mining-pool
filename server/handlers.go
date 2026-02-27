@@ -81,6 +81,10 @@ func (s *Server) handleSubmit(se *session.Session, m *protocol.Message) error {
 	s.stats[se.GetUsername()]++
 	s.mu.Unlock()
 
+	if s.publisher != nil {
+		s.publisher.Publish(se.GetUsername())
+	}
+
 	s.write(se, protocol.BuildResponse(m.ID, nil))
 
 	return nil

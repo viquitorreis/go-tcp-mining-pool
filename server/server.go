@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"tcp_luxor/infra/db"
+	"tcp_luxor/infra/events"
 	"tcp_luxor/pool/dispatcher"
 	"tcp_luxor/pool/session"
 	"tcp_luxor/protocol"
@@ -29,6 +30,7 @@ type Server struct {
 	stats      map[string]int // username -> submssion count
 	conn       *db.DB
 	nextID     atomic.Uint64
+	publisher  *events.Publisher
 	jobsChan   chan dispatcher.ServerJob
 
 	wg sync.WaitGroup
@@ -37,7 +39,7 @@ type Server struct {
 
 // NewServer creates a server ready to start. The db connection is injected
 // rather than opened internally so tests can run without a real database
-func NewServer(port string, conn *db.DB) *Server {
+func NewServer(port string, conn *db.DB, publisher *events.Publisher) *Server {
 	jobsCh := make(chan dispatcher.ServerJob)
 
 	return &Server{
@@ -47,6 +49,7 @@ func NewServer(port string, conn *db.DB) *Server {
 		dispatcher: dispatcher.NewDispatcher(time.Second*30, jobsCh),
 		stats:      make(map[string]int),
 		conn:       conn,
+		publisher:  publisher,
 		jobsChan:   jobsCh,
 	}
 }

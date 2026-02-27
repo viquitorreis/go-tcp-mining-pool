@@ -48,15 +48,17 @@ This runs the full test suite with the race detector enabled. The tests do not r
 
 ```bash
 cmd/
-  server/   entry point for the TCP server
-  client/   entry point for the miner client
-server/     TCP server, request routing, session handling, statistics
-miner/      autonomous TCP client
+  server/       entry point for the TCP server
+  client/       entry point for the miner client
+server/         TCP server, request routing, session handling, statistics
+miner/          autonomous TCP client
 pool/
   session/      connected client state
   dispatcher/   job generation and broadcast
-protocol/   message parsing and serialization
-infra/db/   PostgreSQL connection and bulk upsert of statistics
+protocol/       message parsing, serialization and errors
+infra/
+  db/           PostgreSQL connection and bulk upsert of statistics
+  events/       RabbitMQ publisher and consumer for async submission persistence
 ```
 
 ## Architecture
@@ -104,7 +106,7 @@ Miner represents a fully autonomous TCP client connection for the miner.
     - `receiveJobs`: reads server messages in a loop and places incoming job broadcasts into a buffered channel of size one. If the channel is already full when a new job arrives, the old job is drained and replaced because the miner should always work on the most recent job.
     - `processJobs`: reads from the channel and calls `submit`, which generates a random client nonce, computes `SHA256(serverNonce + clientNonce)` and sends the result. A 1 minute ticker here ensures the miner resubmits the current job if no new job has arrived, satisfying the protocol requirement of at least one submission per minute.
 
-## Protocol
+### Protocol
 
 All messages are delimited by newline using JSON over a persistent TCP connection.
 
@@ -132,3 +134,21 @@ Since writes and state reads are truly independent operations, keeping separate 
 **Stats re-enqueue on flush failure**: If `UpsertSubmissions` returns an error, the counts from the failed batch are merged back into `s.stats` so they are included in the next flush cycle. The alternative would be dropping them on error, which would silently undercount submissions.
 
 **`net.Pipe` in tests**:. The miner and server integration tests use `net.Pipe` to create in-memory connections. This avoids real TCP overhead and port allocation, makes tests deterministic, and keeps them fast. The trade-off is that `net.Pipe` is synchronous, writes block until the other side reads, which requires careful use of goroutines in test setup. And that's why im using `go io.Copy(io.Discard, clientConn)` on some tests, which will essentially reads and discards everything that arrives, doesn't matter the content.
+
+## Message Queue
+
+The system includes an optional RabbitMQ integration for asynchronous statistics persistence. When available, every valid submission publishes a `SubmissionEvent` to a durable queue. A consumer reads from that queue and persists each event to PostgreSQL individually, acknowledging the message only after a successful write.
+
+The `make execute` command starts RabbitMQ automatically using Docker Compose. The management UI is available at `http://localhost:15672` with credentials `guest/guest`, where you can inspect the queue, message rates, and consumer status in real time.
+
+### How it replaces in memory flush
+
+Without RabbitMQ the server accumulates submission counts in a `map[string]int` and fluxes to PostgreSQL every minute. The problem is that a server restart within window loses up to one minute of data. With RabbitMQ, each submission is durably enqueued immediately. If the server restarts before the consumer processes a message, RabbitMQ holds it until the consumer reconnects and process it, because messages are published with `DeliveryMode: Persistent` and the queue is declares ad durable.
+
+### Design decision and trade-offs
+
+**Buffered channel between handler and broker**: The publisher holds an internal Go channel of 1000 events. `handleSubmit` handler writes to this channel and returns immediately without waiting for the broker. A background goroutine drains the channel and sends to RabbitMQ. This means a slow or temporarily unavailable broker never delays the TCP response to the miner. If the buffer fills up, the event is dropped and logged. We prefer losing a single event over blocking the server's critical path.
+
+**RabbitMQ is optional**: If the broker is unavailable at startup, the server logs a warning and continues running without async publishing. The critical path of accept authenticate, and submit does not depend on RabbitMQ being healthy. This ia a deliberate trade-off, because a mining pool shoul keep accepting work even if its statistics pipeline is degraded.
+
+**Manual acknowledgement**: The consumer uses `auto-ack: false`, meaning a message is only removed from the queue after `msg.Ack` is called following successful database write. If the database is temporarily unavailable, the consumer calls `msg.Nack(false, true)` to requeue the message for a lter retry. If the message itself is malformed and will never parse correctly, it calls `msg.Nack(false, false)` to discard it permanently rather than retrying forever.
