@@ -19,7 +19,6 @@ func TestSession_ConcurrentWrites_NoCorruption(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 50 {
 		wg.Go(func() {
-			defer wg.Done()
 			sess.Write([]byte(`{"id":1,"result":true}` + "\n"))
 		})
 	}
