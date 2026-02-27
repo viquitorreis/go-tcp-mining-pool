@@ -61,52 +61,7 @@ infra/
   events/       RabbitMQ publisher and consumer for async submission persistence
 ```
 
-## Architecture
-
-The system have 3 main components that communicate through well-defined boundaries.
-
-### Server
-
-Server represents the TCP server.
-
-- It accepts TCP connections and spawns a goroutine per client (method `handleClient`).
-- Each client goroutine runs a `handleSession` loop that reads with newline delimited ('\n') JSON messages and dispatches them through a middleware chain (`register` method from router).
-- Routes are registered on `routeManager`, which registers them on router. You can pass the protocol method and the middleware (if any used).
-- The `authorize` method is open.
-- The `submit` method requires prior authentication via `authMiddleware`.
-- The server holds a `sync.RWMutex` that protects its shared mutable state: the `clients` map, the `stats` map and the `listener`. Multiple goroutines access all 3 concurrently, client goroutines read and write `clients` and `stats` on every ,message. The dispatcher goroutine reads `clients` during broadcasts and the `WaitForAddr` (test helper) reads `listener during startup`.
-
-### Session
-
-Session represents a single connected client.
-
-- It intentionally uses two mutexes.
-    - The first, `mu` protects session state such as the username, authentication flag, used nonces, and last submission timestamp.
-    - The second, `writeMu` serializes writes to the TCP connection.
-
-    The separation matters because goroutines can need to write to the same connection at the same time, the `handleSession` goroutine may be sending a submit response while the dispatcher is broadcasting a new job to the same client. Without a dedicated write lock, those two concurrent writes would corrupt the TCP stream. Keeping them under separate locks means states reads and TCP writes never block each other unnecessarily.
-
-### Dispatcher
-
-Dispatcher runs a background ticker that fires every 30 seconds to dispatch jobs.
-
-- On each tick it:
-    - Generate a cryptographically random nonce using `crypto/rand`.
-    - Increments the job ID.
-    - Stores the job in a history map.
-    - And sends the job to the server through a channel.
-
-    Keeping the full current history map rather than only the current job means the server can validate submission against past jobs, which is required by the protocol. The server reads from this channel in `listenDispatcher` and calls `broadcastJob`, which snapshots the authenticated client list under a read lock and then writes to each client outside the lock to avoid holding it during potentially slow TCP writes.
-
-### Miner
-
-Miner represents a fully autonomous TCP client connection for the miner.
-
-- It runs two concurrent goroutines after connecting:
-    - `receiveJobs`: reads server messages in a loop and places incoming job broadcasts into a buffered channel of size one. If the channel is already full when a new job arrives, the old job is drained and replaced because the miner should always work on the most recent job.
-    - `processJobs`: reads from the channel and calls `submit`, which generates a random client nonce, computes `SHA256(serverNonce + clientNonce)` and sends the result. A 1 minute ticker here ensures the miner resubmits the current job if no new job has arrived, satisfying the protocol requirement of at least one submission per minute.
-
-### Protocol
+## Protocol
 
 All messages are delimited by newline using JSON over a persistent TCP connection. The `protocol` package owns all parsing and serialization, no other package calls `json.Unmarshal` directly or raw messages.
 
@@ -117,18 +72,14 @@ Every client message has 3 fields: `id`, `method` and `params`:
 - The package uses a two-phase unmarshal where the outer message is parsed first to extract the method, and then `params` is unmarshaled into the correct typed struct (`AuthParams`, `SubmitParams` or `JobParams`) based on that method.
 - Unknown methods are rejected at the parse layer before reaching any handler.
 
+Error messages are defined as sentinel errors at the `protocol` layer, not in the server. This is intentional because these strings are part of the protocol contract, not server or client implementation details. The four protocouls errors are: `"Task does not exist"`, `"Invalid result"`, `"Submission too frequent"`, and `"Duplicate submission"`.
+
 Workflow:
 
 - The client sends `authorize` once after connecting, and then `submit` for each job result.
 - The server always responds with `{"id": <same id>, "result": true}` on success or `{"id": <same id>, "result": false, "error": "<message>"}` on failure.
 - The server broadcasts new jobs to all authenticated clients every 30 seconds using `"id": null, "method": "job", "params": {"job_id": N, "server_nonce": "<hex>"}}`.
 - The SHA256 input is the concatenation of the `server_nonce` and `client_nonce` as plain strings. The order will matter: `SHA256("123" + "456")` is not `SHA256("456" + "123")`
-
-Error messages are defined as sentinel errors at the `protocol` layer, not in the server. This is intentional because these strings are part of the protocol contract, not server or client implementation details. The four protocouls errors are: `"Task does not exist"`, `"Invalid result"`, `"Submission too frequent"`, and `"Duplicate submission"`.
-
-## Statistics
-
-The server accumulates submission counts in memory per username and flushes them to PostgreSQL every minute. The flush uses a single bulk `INSERT ... ON CONFLICT DO UPDATE` that increments the existing count rather than replacing it. If the flush fails, the counts are merged back into the in-memory map so no submissions are lost before the next flush cycle.
 
 ## Design Decisions and Trade-offs
 
@@ -144,11 +95,11 @@ Since writes and state reads are truly independent operations, keeping separate 
 
 **`net.Pipe` in tests**:. The miner and server integration tests use `net.Pipe` to create in-memory connections. This avoids real TCP overhead and port allocation, makes tests deterministic, and keeps them fast. The trade-off is that `net.Pipe` is synchronous, writes block until the other side reads, which requires careful use of goroutines in test setup. And that's why im using `go io.Copy(io.Discard, clientConn)` on some tests, which will essentially reads and discards everything that arrives, doesn't matter the content.
 
+## Statistics
+
+The server accumulates submission counts in memory per username and flushes them to PostgreSQL every minute. The flush uses a single bulk `INSERT ... ON CONFLICT DO UPDATE` that increments the existing count rather than replacing it. If the flush fails, the counts are merged back into the in-memory map so no submissions are lost before the next flush cycle.
+
 ## Message Queue
-
-The system includes an optional RabbitMQ integration for asynchronous statistics persistence. When available, every valid submission publishes a `SubmissionEvent` to a durable queue. A consumer reads from that queue and persists each event to PostgreSQL individually, acknowledging the message only after a successful write.
-
-The `make execute` command starts RabbitMQ automatically using Docker Compose. The management UI is available at `http://localhost:15672` with credentials `guest/guest`, where you can inspect the queue, message rates, and consumer status in real time.
 
 ### How it replaces in memory flush
 
