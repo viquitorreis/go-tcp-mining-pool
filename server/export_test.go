@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-var HandleSubmit = (*Server).HandleSubmit
-var HandleAuth = (*Server).HandleAuth
+var HandleSubmit = (*Server).handleSubmit
+var HandleAuth = (*Server).handleAuth
 
 func NewTestServer() *Server {
 	jobsCh := make(chan dispatcher.ServerJob)

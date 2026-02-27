@@ -17,6 +17,9 @@ import (
 	"time"
 )
 
+// Server represents the TCP server. It accpets client connections, routes messages
+// to the appropriate handlers, tracks submission statistics, and broadcasts
+// new jobs received from the dispatcher
 type Server struct {
 	port       string
 	clients    map[session.SessionID]*session.Session
@@ -32,6 +35,8 @@ type Server struct {
 	mu sync.RWMutex
 }
 
+// NewServer creates a server ready to start. The db connection is injected
+// rather than opened internally so tests can run without a real database
 func NewServer(port string, conn *db.DB) *Server {
 	jobsCh := make(chan dispatcher.ServerJob)
 
@@ -67,14 +72,13 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.dispatcher.Bootstrap()
 
-	// cancelar o Accept quando o ctx terminar
 	go func() {
 		<-ctx.Done()
 		listener.Close()
 	}()
 
-	s.RouteManager()
-	go s.ListenDispatcher(ctx)
+	s.routeManager()
+	go s.listenDispatcher(ctx)
 	go s.runStatsCollector(ctx)
 
 	for {
@@ -109,10 +113,10 @@ func (s *Server) Stop() {
 	slog.Info("server stopped gracefully")
 }
 
-func (s *Server) RouteManager() {
-	s.router.Register(protocol.MethodAuthorize, s.HandleAuth)
+func (s *Server) routeManager() {
+	s.router.register(protocol.MethodAuthorize, s.handleAuth)
 
-	s.router.Register(protocol.MethodSubmit, s.HandleSubmit, s.AuthMiddleware)
+	s.router.register(protocol.MethodSubmit, s.handleSubmit, s.authMiddleware)
 }
 
 func (s *Server) handleClient(ctx context.Context, conn net.Conn) {
@@ -169,7 +173,7 @@ func (s *Server) handleSession(ctx context.Context, session *session.Session) {
 				continue
 			}
 
-			if err := s.SessionHandler(session, msg); err != nil {
+			if err := s.sessionHandler(session, msg); err != nil {
 				slog.Error("error handling session handler", "session_id", session.GetSessionID(), "error", err)
 				s.write(session, protocol.BuildResponse(msg.ID, err))
 
@@ -197,7 +201,7 @@ func (s *Server) write(se *session.Session, msg any) {
 	se.Write(data)
 }
 
-func (s *Server) ListenDispatcher(ctx context.Context) {
+func (s *Server) listenDispatcher(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():

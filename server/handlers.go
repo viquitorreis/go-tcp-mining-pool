@@ -13,11 +13,11 @@ import (
 
 type Handler func(se *session.Session, m *protocol.Message) error
 
-func (s *Server) SessionHandler(se *session.Session, m *protocol.Message) error {
-	return s.router.Dispatch(se, m)
+func (s *Server) sessionHandler(se *session.Session, m *protocol.Message) error {
+	return s.router.dispatch(se, m)
 }
 
-func (s *Server) HandleAuth(se *session.Session, m *protocol.Message) error {
+func (s *Server) handleAuth(se *session.Session, m *protocol.Message) error {
 	if m.AuthParams == nil {
 		return fmt.Errorf("missing auth params")
 	}
@@ -46,22 +46,22 @@ func (s *Server) HandleAuth(se *session.Session, m *protocol.Message) error {
 	return nil
 }
 
-func (s *Server) HandleSubmit(se *session.Session, m *protocol.Message) error {
+func (s *Server) handleSubmit(se *session.Session, m *protocol.Message) error {
 	if m.SubmitParams.JobID <= 0 {
 		return ErrInvalidJob
 	}
 
 	if time.Since(se.GetLastSubmitAt()) < time.Second {
-		return ErrRateLimit
+		return protocol.ErrRateLimit
 	}
 
 	serverNonce, exists := s.dispatcher.GetNonce(dispatcher.JobID(m.SubmitParams.JobID))
 	if !exists {
-		return ErrTaskNotFound
+		return protocol.ErrTaskNotFound
 	}
 
 	if se.HasNonce(m.SubmitParams.ClientNonce) {
-		return ErrDuplicateNonce
+		return protocol.ErrDuplicateNonce
 	}
 
 	hasher := sha256.New()
@@ -71,7 +71,7 @@ func (s *Server) HandleSubmit(se *session.Session, m *protocol.Message) error {
 	hashStr := hex.EncodeToString(hashBytes)
 
 	if !strings.EqualFold(hashStr, m.SubmitParams.Result) {
-		return ErrInvalidResult
+		return protocol.ErrInvalidResult
 	}
 
 	se.UpdateTimeSubmit()

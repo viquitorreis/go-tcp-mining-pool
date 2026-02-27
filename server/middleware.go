@@ -7,7 +7,7 @@ import (
 
 type Middleware func(Handler) Handler
 
-func (s *Server) AuthMiddleware(next Handler) Handler {
+func (s *Server) authMiddleware(next Handler) Handler {
 	return func(s *session.Session, m *protocol.Message) error {
 		if !s.IsAuthenticated() {
 			return ErrUnauthorized

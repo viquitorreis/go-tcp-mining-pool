@@ -16,12 +16,11 @@ func NewRouter() *Router {
 	}
 }
 
-func (r *Router) Register(method protocol.Method, h Handler, middlewares ...Middleware) {
+func (r *Router) register(method protocol.Method, h Handler, middlewares ...Middleware) {
 	if _, ok := r.routes[method]; ok {
 		return
 	}
 
-	// middlewares de fora para dentro
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		h = middlewares[i](h)
 	}
@@ -29,11 +28,12 @@ func (r *Router) Register(method protocol.Method, h Handler, middlewares ...Midd
 	r.routes[method] = h
 }
 
-func (r *Router) Dispatch(se *session.Session, m *protocol.Message) error {
+func (r *Router) dispatch(se *session.Session, m *protocol.Message) error {
 	h, ok := r.routes[m.Method]
 	if !ok {
 		slog.Error("unknown method", "method", m.Method)
 		return ErrUnknownMethod
 	}
+
 	return h(se, m)
 }

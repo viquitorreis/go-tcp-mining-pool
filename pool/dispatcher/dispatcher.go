@@ -16,6 +16,9 @@ type IDispatcher interface {
 	GetCurrentJob() *ServerJob
 }
 
+// Dispatcher generates a new server nonce on a fixed interval and
+// broadcasts jobs to the server through jobs channel. It keeps history of jobs ids
+// and nonces so the server can validate submissions against past jobs
 type Dispatcher struct {
 	Job      *ServerJob
 	History  map[JobID]string
@@ -39,6 +42,8 @@ func NewDispatcher(interval time.Duration, jc chan<- ServerJob) IDispatcher {
 	}
 }
 
+// Boobstrap starts the background ticker that generates and broadcasts jobs.
+// It is called once after creation, before the server starts accepting clients
 func (d *Dispatcher) Bootstrap() {
 	go d.dispatch()
 }
@@ -77,6 +82,8 @@ func (d *Dispatcher) dispatch() {
 	}
 }
 
+// GetNonce returns the sever nonce for the given job ID and whether it exists
+// returning false mean the job ID was never issued by the Dispatcher
 func (d *Dispatcher) GetNonce(jobID JobID) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()

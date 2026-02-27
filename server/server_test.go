@@ -70,8 +70,8 @@ func TestHandleSubmit_RateLimit(t *testing.T) {
 		},
 	}
 
-	err := s.HandleSubmit(sess, msg)
-	if !errors.Is(err, ErrRateLimit) {
+	err := s.handleSubmit(sess, msg)
+	if !errors.Is(err, protocol.ErrRateLimit) {
 		t.Errorf("expected ErrRateLimit, got: %v", err)
 	}
 }
@@ -114,8 +114,8 @@ func TestHandleSubmit_JobNotFound(t *testing.T) {
 		},
 	}
 
-	err := s.HandleSubmit(sess, msg)
-	if !errors.Is(err, ErrTaskNotFound) {
+	err := s.handleSubmit(sess, msg)
+	if !errors.Is(err, protocol.ErrTaskNotFound) {
 		t.Errorf("expected ErrInexistentServerNonce, got: %v", err)
 	}
 }
@@ -142,8 +142,8 @@ func TestHandleSubmit_DuplicateNonce(t *testing.T) {
 		},
 	}
 
-	err := s.HandleSubmit(sess, msg)
-	if !errors.Is(err, ErrDuplicateNonce) {
+	err := s.handleSubmit(sess, msg)
+	if !errors.Is(err, protocol.ErrDuplicateNonce) {
 		t.Errorf("expected ErrDuplicateNonce, got: %v", err)
 	}
 }
@@ -168,8 +168,8 @@ func TestHandleSubmit_InvalidResult(t *testing.T) {
 		},
 	}
 
-	err := s.HandleSubmit(sess, msg)
-	if !errors.Is(err, ErrInvalidResult) {
+	err := s.handleSubmit(sess, msg)
+	if !errors.Is(err, protocol.ErrInvalidResult) {
 		t.Errorf("expected ErrInvalidResult, got: %v", err)
 	}
 }
@@ -199,7 +199,7 @@ func TestHandleSubmit_ValidSubmission(t *testing.T) {
 		},
 	}
 
-	err := s.HandleSubmit(sess, msg)
+	err := s.handleSubmit(sess, msg)
 	if err != nil {
 		t.Errorf("expected nil error for valid submission, got: %v", err)
 	}

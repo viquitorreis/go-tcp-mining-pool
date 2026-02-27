@@ -11,6 +11,11 @@ import (
 
 type SessionID string
 
+// Session represents a single connected client, it holds authentication state,
+// submission history and the underlyint TCP connection
+// it uses 2 mutexes for a purpose: mu protects session states (username, nonces, timestamps)
+// while writeMu serializes TCP writes independently so broadcasts
+// from the dispatcher will never interleave with handler responses
 type Session struct {
 	id            SessionID
 	conn          net.Conn
@@ -29,6 +34,9 @@ type ISession interface {
 	Read(buf []byte) (int, error)
 }
 
+// NewSession creates a new unauthenticated session for the given connection
+// the id comes from the server's atomic counter, which guarantees uniquenes even
+// when clients connect and disconnect rapidly
 func NewSession(id uint64, conn net.Conn) *Session {
 	host, _ := os.Hostname()
 	sessionID := SessionID(fmt.Sprintf("%d_%s", id, host))

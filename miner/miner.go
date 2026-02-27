@@ -15,7 +15,9 @@ import (
 	"time"
 )
 
-// miner represents a tcp client connection
+// Miner represents a fully autonomous TCP client connection for the miner. It connects
+// to the server, authenticates, receives job broadcasts, computes SHA256 resutls, and submits them.
+// It runs two concurrent goroutines: one to receive jobs and another one to process and submit them
 type Miner struct {
 	addr     string
 	username string
@@ -146,7 +148,7 @@ func (m *Miner) receiveJobs(ctx context.Context) error {
 
 			slog.Info("received job", "job_id", params.JobID, "server_nonce", params.ServerNonce)
 
-			// doesnt block in case submitLoop is still processing previous job, discard
+			// doesnt block in case processJobs is still processing previous job, discard
 			select {
 			case m.jobChan <- params:
 			default:
