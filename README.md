@@ -55,7 +55,7 @@ miner/          autonomous TCP client
 pool/
   session/      connected client state
   dispatcher/   job generation and broadcast
-protocol/       message parsing, serialization and errors
+protocol/       protocol layer, message parsing, serialization by method and errors
 infra/
   db/           PostgreSQL connection and bulk upsert of statistics
   events/       RabbitMQ publisher and consumer for async submission persistence
@@ -108,14 +108,23 @@ Miner represents a fully autonomous TCP client connection for the miner.
 
 ### Protocol
 
-All messages are delimited by newline using JSON over a persistent TCP connection.
+All messages are delimited by newline using JSON over a persistent TCP connection. The `protocol` package owns all parsing and serialization, no other package calls `json.Unmarshal` directly or raw messages.
+
+Every client message has 3 fields: `id`, `method` and `params`:
+
+- The `id` correlates requests to responses.
+- The `method` will determine how `params` is parsed
+- The package uses a two-phase unmarshal where the outer message is parsed first to extract the method, and then `params` is unmarshaled into the correct typed struct (`AuthParams`, `SubmitParams` or `JobParams`) based on that method.
+- Unknown methods are rejected at the parse layer before reaching any handler.
+
+Workflow:
 
 - The client sends `authorize` once after connecting, and then `submit` for each job result.
-- The server responds to both with `{"id": <same id>, "result": true}` on success or `{"id": <same id>, "result": false, "error": "<message>"}` on failure.
+- The server always responds with `{"id": <same id>, "result": true}` on success or `{"id": <same id>, "result": false, "error": "<message>"}` on failure.
 - The server broadcasts new jobs to all authenticated clients every 30 seconds using `"id": null, "method": "job", "params": {"job_id": N, "server_nonce": "<hex>"}}`.
 - The SHA256 input is the concatenation of the `server_nonce` and `client_nonce` as plain strings. The order will matter: `SHA256("123" + "456")` is not `SHA256("456" + "123")`
 
-Error messages are fixed strings defined by the protocol: "Task does not exist", "Invalid result", "Submission too frequent", and "Duplicate submission".
+Error messages are defined as sentinel errors at the `protocol` layer, not in the server. This is intentional because these strings are part of the protocol contract, not server or client implementation details. The four protocouls errors are: `"Task does not exist"`, `"Invalid result"`, `"Submission too frequent"`, and `"Duplicate submission"`.
 
 ## Statistics
 
