@@ -11,6 +11,10 @@ Built as a deep dive into Go concurrency primitives, custom binary/text protocol
 - Graceful degradation: server stays up even if RabbitMQ/DB is down
 - Deterministic concurrency tests using `net.Pipe` + `-race`
 
+## Architecture
+
+![Architecture diagram](assets/architecture.png)
+
 ## Project Structure
 
 ```bash
