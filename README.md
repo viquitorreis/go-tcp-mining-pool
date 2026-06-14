@@ -1,48 +1,15 @@
-# TCP Mining Pool
+# Go TCP Mining Pool
 
-A TCP based message processing system that simulates a simplified mining pool. The server maintains persistent connections with miners, distributes jobs every 30 seconds, validates SHA256 submissions, and aggregates statistics in PostgreSQL.
+A production-style TCP server in Go that simulates a mining pool: it maintains  persistent connections with miners, dispatches jobs on a timer, validates SHA256 submissions, and durably processes statistics through RabbitMQ into PostgreSQL.
 
-## Requirements
+Built as a deep dive into Go concurrency primitives, custom binary/text protocol design, and reliability patterns (graceful degradation, manual ack/nack, re-enqueue on failure) the kind of decisions that show up in real backend systems.
 
-- Go 1.25+
-- Docker and Docker Compose
-
-## Running
-
-Start the server (it also starts the PostgreSQL):
-
-```bash
-make execute
-```
-
-Connect a miner (run on as many terminals as you want):
-
-```bash
-make new-miner name=miner1
-make new-miner name=miner2
-```
-
-To test manually with a raw TCP connection, use telnet or nc:
-
-```bash
-telnet localhost 12345
-{"id":1,"method":"authorize","params":{"username":"miner1"}}
-{"id":2,"method":"submit","params":{"job_id":1,"client_nonce":"abc","result":"<sha256>"}}
-```
-
-To stop everything, clean up binaries and Docker volumes:
-
-```bash
-make clean
-```
-
-## Running Tests
-
-```bash
-make test
-```
-
-This runs the full test suite with the race detector enabled. The tests do not require a database or Docker, they use in-memory connections using ```net.Pipe``` and fake dispatcher implementations.
+**What this demonstrates:**
+- Custom application-layer protocol over raw TCP (no HTTP framework)
+- Fine-grained mutex design to avoid lock contention under concurrent broadcasts
+- Async processing with RabbitMQ (durable queues, manual ack, dead-letter-style nack)
+- Graceful degradation: server stays up even if RabbitMQ/DB is down
+- Deterministic concurrency tests using `net.Pipe` + `-race`
 
 ## Project Structure
 
@@ -112,3 +79,45 @@ Without RabbitMQ the server accumulates submission counts in a `map[string]int` 
 **RabbitMQ is optional**: If the broker is unavailable at startup, the server logs a warning and continues running without async publishing. The critical path of accept authenticate, and submit does not depend on RabbitMQ being healthy. This ia a deliberate trade-off, because a mining pool shoul keep accepting work even if its statistics pipeline is degraded.
 
 **Manual acknowledgement**: The consumer uses `auto-ack: false`, meaning a message is only removed from the queue after `msg.Ack` is called following successful database write. If the database is temporarily unavailable, the consumer calls `msg.Nack(false, true)` to requeue the message for a lter retry. If the message itself is malformed and will never parse correctly, it calls `msg.Nack(false, false)` to discard it permanently rather than retrying forever.
+
+## Requirements
+
+- Go 1.25+
+- Docker and Docker Compose
+
+## Running
+
+Start the server (it also starts the PostgreSQL):
+
+```bash
+make execute
+```
+
+Connect a miner (run on as many terminals as you want):
+
+```bash
+make new-miner name=miner1
+make new-miner name=miner2
+```
+
+To test manually with a raw TCP connection, use telnet or nc:
+
+```bash
+telnet localhost 12345
+{"id":1,"method":"authorize","params":{"username":"miner1"}}
+{"id":2,"method":"submit","params":{"job_id":1,"client_nonce":"abc","result":"<sha256>"}}
+```
+
+To stop everything, clean up binaries and Docker volumes:
+
+```bash
+make clean
+```
+
+## Running Tests
+
+```bash
+make test
+```
+
+This runs the full test suite with the race detector enabled. The tests do not require a database or Docker, they use in-memory connections using ```net.Pipe``` and fake dispatcher implementations.
